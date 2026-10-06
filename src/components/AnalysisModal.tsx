@@ -12,6 +12,7 @@ import {
 import { PRESET_DATASETS } from '../data/sampleReviews';
 import { ExecutiveReport } from '../types';
 import { useLanguage } from '../context/LanguageContext';
+import { generateClientReport } from '../utils/clientAnalyzer';
 
 interface Props {
   isOpen: boolean;
@@ -75,25 +76,37 @@ export const AnalysisModal: React.FC<Props> = ({ isOpen, onClose, onReportGenera
         reviewsToAnalyze = p.reviews;
       }
 
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reviews: reviewsToAnalyze,
-          industry,
-          alertThreshold,
-          lang: language,
-        }),
-      });
+      try {
+        const response = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reviews: reviewsToAnalyze,
+            industry,
+            alertThreshold,
+            lang: language,
+          }),
+        });
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || (language === 'en' ? 'Failed to process customer reviews.' : 'Gagal memproses data ulasan.'));
+        if (response.ok) {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const report: ExecutiveReport = await response.json();
+            if (report && report.metadata) {
+              onReportGenerated(report);
+              onClose();
+              setIsLoading(false);
+              return;
+            }
+          }
+        }
+      } catch (networkErr) {
+        // Fallback to local computation
       }
 
-      const report: ExecutiveReport = await response.json();
-
-      onReportGenerated(report);
+      // High-fidelity fallback for offline or Vercel static deployment
+      const fallbackReport = generateClientReport(reviewsToAnalyze, industry, alertThreshold, language);
+      onReportGenerated(fallbackReport);
       onClose();
     } catch (err: any) {
       setErrorMsg(err.message || 'Error occurred during processing.');

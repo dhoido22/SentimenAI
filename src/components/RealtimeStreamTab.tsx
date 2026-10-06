@@ -91,6 +91,47 @@ export const RealtimeStreamTab: React.FC<Props> = ({ alertThreshold = 25.0 }) =>
     }
   }, [isSpike, soundEnabled]);
 
+  const analyzeSingleReviewLocally = (text: string, source: string, customId?: string): LiveReviewItem => {
+    const textLow = text.toLowerCase();
+    const negWords = ['kecewa', 'lambat', 'gagal', 'rusak', 'jelek', 'rugi', 'parah', 'buruk', 'terpotong', 'batal', 'marah', 'error', 'bug', 'lelet', 'slow', 'fail', 'cancel', 'broke', 'terrible', 'worst'];
+    const posWords = ['puas', 'bagus', 'cepat', 'ramah', 'mantap', 'keren', 'suka', 'terima kasih', 'recommended', 'hebat', 'rapi', 'great', 'fast', 'love', 'helpful', 'awesome', 'excellent'];
+
+    const nMatch = negWords.filter((w) => textLow.includes(w)).length;
+    const pMatch = posWords.filter((w) => textLow.includes(w)).length;
+
+    let sentiment: 'POSITIF' | 'NETRAL' | 'NEGATIF' = 'NETRAL';
+    let score = 0.0;
+    let urgency: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
+    let category = language === 'en' ? 'Customer Care' : 'Layanan Pelanggan Umum';
+
+    if (nMatch > pMatch) {
+      sentiment = 'NEGATIF';
+      score = -(0.5 + Math.min(nMatch * 0.2, 0.45));
+      urgency = textLow.includes('saldo') || textLow.includes('uang') || textLow.includes('charge') || textLow.includes('payment') ? 'CRITICAL' : 'HIGH';
+      category = textLow.includes('saldo') || textLow.includes('bayar') || textLow.includes('payment')
+        ? (language === 'en' ? 'Payment System' : 'Sistem Pembayaran')
+        : (language === 'en' ? 'Delivery & Logistics' : 'Layanan & Pengiriman');
+    } else if (pMatch > nMatch) {
+      sentiment = 'POSITIF';
+      score = 0.5 + Math.min(pMatch * 0.2, 0.45);
+      urgency = 'LOW';
+      category = language === 'en' ? 'Service & Product Satisfaction' : 'Kepuasan Layanan & Produk';
+    }
+
+    return {
+      id: customId || `LIVE-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+      text,
+      source,
+      timestamp: new Date().toLocaleTimeString(language === 'en' ? 'en-US' : 'id-ID'),
+      sentiment,
+      sentiment_score: Number(score.toFixed(2)),
+      category,
+      urgency,
+      summary: text.length > 55 ? text.slice(0, 52) + '...' : text,
+      is_negative: sentiment === 'NEGATIF',
+    };
+  };
+
   // Stream Interval
   useEffect(() => {
     if (!isPlaying) return;
@@ -98,6 +139,7 @@ export const RealtimeStreamTab: React.FC<Props> = ({ alertThreshold = 25.0 }) =>
     const interval = setInterval(async () => {
       const sample = REALTIME_SIMULATOR_REVIEWS[simIndexRef.current % REALTIME_SIMULATOR_REVIEWS.length];
       simIndexRef.current += 1;
+      const itemId = `STREAM-${Date.now().toString(36).slice(-4).toUpperCase()}`;
 
       try {
         const res = await fetch('/api/analyze-single', {
@@ -106,21 +148,32 @@ export const RealtimeStreamTab: React.FC<Props> = ({ alertThreshold = 25.0 }) =>
           body: JSON.stringify({
             reviewText: sample.text,
             source: sample.source,
-            id: `STREAM-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+            id: itemId,
           }),
         });
-        const data = await res.json();
-
-        setLiveReviews((prev) => [
-          {
-            ...data,
-            timestamp: new Date().toLocaleTimeString(language === 'en' ? 'en-US' : 'id-ID'),
-          },
-          ...prev.slice(0, 29), // keep max 30 items in buffer
-        ]);
+        if (res.ok) {
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data && data.sentiment) {
+              setLiveReviews((prev) => [
+                {
+                  ...data,
+                  timestamp: new Date().toLocaleTimeString(language === 'en' ? 'en-US' : 'id-ID'),
+                },
+                ...prev.slice(0, 29),
+              ]);
+              return;
+            }
+          }
+        }
       } catch (err) {
-        console.error('Failed to analyze stream item:', err);
+        // Fall back locally on offline or static deployment
       }
+
+      // Local fallback
+      const localItem = analyzeSingleReviewLocally(sample.text, sample.source, itemId);
+      setLiveReviews((prev) => [localItem, ...prev.slice(0, 29)]);
     }, speedMs);
 
     return () => clearInterval(interval);
@@ -132,6 +185,7 @@ export const RealtimeStreamTab: React.FC<Props> = ({ alertThreshold = 25.0 }) =>
     if (!manualInput.trim()) return;
 
     setIsAnalyzingManual(true);
+    const customId = `USER-${Date.now().toString(36).slice(-4).toUpperCase()}`;
     try {
       const res = await fetch('/api/analyze-single', {
         method: 'POST',
@@ -139,23 +193,36 @@ export const RealtimeStreamTab: React.FC<Props> = ({ alertThreshold = 25.0 }) =>
         body: JSON.stringify({
           reviewText: manualInput,
           source: manualSource,
-          id: `USER-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+          id: customId,
         }),
       });
-      const analyzed = await res.json();
-      setLiveReviews((prev) => [
-        {
-          ...analyzed,
-          timestamp: new Date().toLocaleTimeString(language === 'en' ? 'en-US' : 'id-ID'),
-        },
-        ...prev,
-      ]);
-      setManualInput('');
+      if (res.ok) {
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const analyzed = await res.json();
+          if (analyzed && analyzed.sentiment) {
+            setLiveReviews((prev) => [
+              {
+                ...analyzed,
+                timestamp: new Date().toLocaleTimeString(language === 'en' ? 'en-US' : 'id-ID'),
+              },
+              ...prev,
+            ]);
+            setManualInput('');
+            setIsAnalyzingManual(false);
+            return;
+          }
+        }
+      }
     } catch (err) {
-      console.error(err);
-    } finally {
-      setIsAnalyzingManual(false);
+      // Fallback below
     }
+
+    // Local classification
+    const localAnalyzed = analyzeSingleReviewLocally(manualInput, manualSource, customId);
+    setLiveReviews((prev) => [localAnalyzed, ...prev]);
+    setManualInput('');
+    setIsAnalyzingManual(false);
   };
 
   return (

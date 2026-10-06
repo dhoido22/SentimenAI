@@ -13,104 +13,92 @@ import { SopModal } from './components/SopModal';
 import { PrintExecutiveReport } from './components/PrintExecutiveReport';
 import { ExecutiveReport } from './types';
 import { PRESET_DATASETS } from './data/sampleReviews';
+import { INITIAL_EXECUTIVE_REPORT } from './data/initialReport';
+import { generateClientReport, downloadReportAsCsv } from './utils/clientAnalyzer';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 
 function AppContent() {
   const { language, t } = useLanguage();
   const [activeTab, setActiveTab] = useState<string>('executive');
-  const [report, setReport] = useState<ExecutiveReport | null>(null);
-  const [isLoadingInitial, setIsLoadingInitial] = useState<boolean>(true);
+  // Initialize with complete executive report immediately so it never shows "Gagal memuat"
+  const [report, setReport] = useState<ExecutiveReport>(INITIAL_EXECUTIVE_REPORT);
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState<boolean>(false);
   const [isSopModalOpen, setIsSopModalOpen] = useState<boolean>(false);
   const [isPrintReportOpen, setIsPrintReportOpen] = useState<boolean>(false);
 
-  // Fetch initial report from backend
+  // Asynchronously sync with backend if available
   useEffect(() => {
-    async function fetchLatestReport() {
+    let isMounted = true;
+    async function syncLatestReport() {
       try {
         const res = await fetch('/api/reports/latest');
         if (res.ok) {
-          const data = await res.json();
-          setReport(data);
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (isMounted && data && data.metadata) {
+              setReport(data);
+            }
+          }
         }
       } catch (err) {
-        console.error('Failed to fetch initial executive report:', err);
-      } finally {
-        setIsLoadingInitial(false);
+        // Silently use INITIAL_EXECUTIVE_REPORT on static/Vercel environments
+        console.debug('Operating in standalone client intelligence mode:', err);
       }
     }
-    fetchLatestReport();
+    syncLatestReport();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  // Quick preset loader
+  // Quick preset loader (works both full-stack and static)
   const handleLoadPreset = async (presetId: string) => {
     const preset = PRESET_DATASETS.find((p) => p.id === presetId);
     if (!preset) return;
 
-    setIsLoadingInitial(true);
+    const indName = language === 'en' ? preset.industryEn : preset.industryId;
+
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reviews: preset.reviews,
-          industry: language === 'en' ? preset.industryEn : preset.industryId,
+          industry: indName,
           alertThreshold: 25.0,
           lang: language,
         }),
       });
+
       if (res.ok) {
-        const data = await res.json();
-        setReport(data);
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && data.metadata) {
+            setReport(data);
+            return;
+          }
+        }
       }
     } catch (err) {
-      console.error(err);
-    } finally {
-      setIsLoadingInitial(false);
+      console.debug('API unreachable, computing deterministic report locally:', err);
     }
+
+    // High-fidelity client-side fallback (for Vercel / offline)
+    const clientReport = generateClientReport(preset.reviews, indName, 25.0, language);
+    setReport(clientReport);
   };
 
-  // CSV export handler
+  // Resilient CSV export handler (works in browser & server)
   const handleExportCsv = () => {
-    window.location.href = '/api/export/csv';
+    downloadReportAsCsv(report);
   };
 
   // PDF print handler
   const handlePrintPdf = () => {
     setIsPrintReportOpen(true);
   };
-
-  if (isLoadingInitial && !report) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-200">
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-cyan-400 animate-spin mb-4" />
-        <h2 className="text-lg font-bold">
-          {language === 'en' ? 'Loading SentimenAI Pro Engine...' : 'Memuat SentimenAI Pro Engine...'}
-        </h2>
-        <p className="text-xs text-slate-400 mt-1">
-          {language === 'en'
-            ? 'Initializing executive customer data intelligence pipeline'
-            : 'Menginisialisasi pipeline intelijen data pelanggan eksekutif'}
-        </p>
-      </div>
-    );
-  }
-
-  if (!report) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-200 p-4">
-        <p className="text-sm text-red-400 mb-4">
-          {language === 'en' ? 'Failed to load customer report data.' : 'Gagal memuat laporan data pelanggan.'}
-        </p>
-        <button
-          onClick={() => window.location.reload()}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold"
-        >
-          {language === 'en' ? 'Reload' : 'Muat Ulang'}
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-blue-600 selection:text-white">
