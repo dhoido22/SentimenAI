@@ -1,0 +1,7 @@
+{
+  "name": "SentimenAI Pro - Sistem Analisis Ulasan & Intelijen Pelanggan",
+  "description": "Sistem AI analisis data pelanggan profesional untuk analisis sentimen real-time, kategorisasi isu, laporan eksekutif JSON murni, tren mingguan, deteksi lonjakan sentimen negatif, dan integrasi BI dasbor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
